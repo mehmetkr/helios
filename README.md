@@ -90,7 +90,7 @@ A hybrid `_active_requests` counter and FSM ACTIVE state tracks concurrent infer
 
 ### Predictive Pre-Warming
 
-Holt's linear trend method (double exponential smoothing) forecasts per-model demand. EWMA tracks request rates normalised to per-minute. Models are proactively loaded when predicted demand exceeds a configurable threshold — reducing cold starts before they happen.
+Holt's linear trend method (double exponential smoothing) forecasts per-model demand. EWMA tracks request rates normalized to per-minute. Models are proactively loaded when predicted demand exceeds a configurable threshold — reducing cold starts before they happen.
 
 ### Hypothesis Property-Based Testing
 
@@ -105,7 +105,7 @@ A concurrent Hypothesis test drives random request sequences through `asyncio.ga
 | Python | 3.12+ |
 | API | FastAPI |
 | Async runtime | asyncio |
-| API data modelling | Pydantic v2 |
+| API data modeling | Pydantic v2 |
 | Internal data models | `@dataclass(frozen=True)` |
 | Prediction | statsmodels (Holt's linear trend) |
 | CPU-bound offloading | `asyncio.to_thread()` |
