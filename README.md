@@ -125,7 +125,7 @@ A concurrent Hypothesis test drives random request sequences through `asyncio.ga
 - [x] **Phase 1 — Foundation**
   Exception hierarchy, FSM state definitions, configuration dataclasses with validation, Pydantic API models.
 
-- [ ] **Phase 2 — Building Blocks**
+- [x] **Phase 2 — Building Blocks**
   Simulated model runner with failure injection. LRU and cost-based eviction policies (5-factor scoring). Holt predictor with lazy dirty-flag refit via `asyncio.to_thread()`. Unit tests for each component.
 
 - [ ] **Phase 3 — Core Engine**
