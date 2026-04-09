@@ -2,8 +2,8 @@
 
 Manages the lifecycle of simulated model runners: registration, memory budget,
 eviction, load orchestration, pre-warming, health checks, and graceful shutdown.
-This module is built incrementally -- load orchestration, pre-warm loop, health
-checks, and shutdown are added in subsequent commits.
+This module is built incrementally -- pre-warm loop, health checks, and
+shutdown are added in subsequent commits.
 """
 
 from __future__ import annotations
@@ -16,7 +16,13 @@ from typing import Any
 
 import structlog
 
-from helios.config import PoolConfig, RunnerConfig, RunnerMetrics
+from helios.config import (
+    InferenceRequest,
+    InferenceResult,
+    PoolConfig,
+    RunnerConfig,
+    RunnerMetrics,
+)
 from helios.exceptions import (
     AdmissionRejectedError,
     HeliosError,
@@ -24,7 +30,7 @@ from helios.exceptions import (
     RunnerStateError,
 )
 from helios.fsm import RunnerLifecycleState
-from helios.observability.metrics import EVICTIONS_TOTAL
+from helios.observability.metrics import EVICTIONS_TOTAL, LOAD_FAILURES
 from helios.policies.base import BaseEvictionPolicy
 from helios.policies.lru import LRUEvictionPolicy
 from helios.prediction.holt import HoltPredictor
@@ -120,6 +126,149 @@ class HeliosPool:
     def release(self) -> None:
         """Decrement admission counter. Called by RequestRouter in finally block."""
         self._in_flight_requests -= 1
+
+    async def ensure_loaded(self, model_id: str) -> None:
+        """Ensure a model is ready for inference.
+
+        Three code paths for correctness and performance:
+        - Fast path 1: already WARM/ACTIVE -- return immediately (no lock)
+        - Fast path 2: load in progress -- share existing future (no lock)
+        - Slow path: COLD -- acquire lock, create future, start load
+        """
+        if not self._started:
+            raise HeliosError("pool not started")
+        if model_id not in self._configs:
+            raise HeliosError(f"model not registered: {model_id!r}")
+
+        # Fast path 1: model already warm or serving -- no lock needed.
+        # Safe without lock: _runner_states is only mutated from the event loop thread.
+        state = self._runner_states.get(model_id)
+        if state in (RunnerLifecycleState.WARM, RunnerLifecycleState.ACTIVE):
+            return
+
+        # Fast path 2: model currently loading -- share the existing future.
+        # Prevents blocking on _runner_locks[model_id] which _initiate_load
+        # holds for the full I/O-bound load duration. dict.get() is atomic
+        # in CPython; correctness is guaranteed by re-checks in the slow path.
+        existing_future = self._load_futures.get(model_id)
+        if existing_future is not None:
+            await asyncio.shield(existing_future)
+            return
+
+        # Slow path: model is COLD and no load is in progress.
+        async with self._runner_locks[model_id]:
+            # Re-check under lock: state may have changed during lock acquisition.
+            if self._runner_states.get(model_id) in (
+                RunnerLifecycleState.WARM,
+                RunnerLifecycleState.ACTIVE,
+            ):
+                return
+            # Re-check future: another coroutine may have created one while we waited.
+            if model_id in self._load_futures:
+                future = self._load_futures[model_id]
+            else:
+                future = asyncio.get_running_loop().create_future()
+                self._load_futures[model_id] = future
+                self._spawn_task(self._initiate_load_and_resolve(model_id, future))
+        await asyncio.shield(future)
+
+    async def dispatch(self, request: InferenceRequest) -> InferenceResult:
+        """Forward request to a WARM/ACTIVE runner.
+
+        Manages WARM<->ACTIVE FSM transitions via _active_requests counter.
+        All operations before the first await are synchronous -- atomic under
+        single-threaded asyncio. No lock needed.
+        """
+        mid = request.model_id
+        state = self._runner_states.get(mid)
+        if state not in (RunnerLifecycleState.WARM, RunnerLifecycleState.ACTIVE):
+            raise RunnerStateError(
+                f"dispatch called on non-ready runner: {mid!r} is "
+                f"{state.name if state else 'unregistered'}"
+            )
+        # Synchronous block -- no await before infer(). Atomic in single-threaded asyncio.
+        self._active_requests[mid] += 1
+        if self._active_requests[mid] == 1:
+            self._runner_states[mid] = RunnerLifecycleState.ACTIVE  # WARM -> ACTIVE
+        try:
+            result = await self._runners[mid].infer(request)
+            self._request_counter[mid] += 1
+            return result
+        finally:
+            self._active_requests[mid] -= 1
+            # Only transition back to WARM if counter hit zero AND still ACTIVE.
+            # During shutdown, state may have been force-set to COLD.
+            if (
+                self._active_requests[mid] == 0
+                and self._runner_states.get(mid) is RunnerLifecycleState.ACTIVE
+            ):
+                self._runner_states[mid] = RunnerLifecycleState.WARM  # ACTIVE -> WARM
+
+    # --- Load orchestration (private) ---
+
+    async def _initiate_load_and_resolve(
+        self, model_id: str, future: asyncio.Future[None]
+    ) -> None:
+        """Load a model runner and resolve the shared future when done.
+
+        The finally block is the single authoritative cleanup point for
+        _load_futures[model_id]. It runs regardless of success, failure,
+        or cancellation -- ensuring the entry is always removed when this
+        coroutine exits. No other code removes entries during normal operation.
+        shutdown() may clear the mapping after resolving all futures.
+        """
+        try:
+            await self._initiate_load(model_id)
+            future.set_result(None)
+        except Exception as exc:
+            if not future.done():
+                future.set_exception(exc)
+        finally:
+            self._load_futures.pop(model_id, None)
+
+    async def _initiate_load(self, model_id: str) -> None:
+        """Execute the two-phase load sequence with rollback on failure.
+
+        Phase 1 (under _memory_lock): evict + reserve memory.
+        Phase 2 (under _runner_locks): simulate model load.
+        The two locks are never held simultaneously.
+        """
+        async with self._load_semaphore:
+            async with self._memory_lock:
+                self._evict_until_free(self._configs[model_id].memory_gb)
+                self._reserve_memory(model_id)
+            try:
+                async with self._runner_locks[model_id]:
+                    await self._simulate_load(model_id)
+            except BaseException:
+                # Rollback: release reserved memory and reset state.
+                # Catches both Exception (load failures) and BaseException
+                # (asyncio.CancelledError during shutdown). Without BaseException,
+                # task cancellation would bypass rollback and permanently leak
+                # the reserved memory budget.
+                # Per-model lock is released (exiting async with _runner_locks)
+                # BEFORE re-acquiring _memory_lock -- the two locks are never
+                # nested. See two-phase locking design constraint.
+                async with self._memory_lock:
+                    self._release_memory(model_id)
+                    self._runner_states[model_id] = RunnerLifecycleState.COLD
+                LOAD_FAILURES.labels(model_id=model_id).inc()
+                logger.critical(
+                    "helios.load.rollback",
+                    model_id=model_id,
+                    exc_info=True,
+                )
+                raise
+
+    async def _simulate_load(self, model_id: str) -> None:
+        """Drive FSM state transitions and delegate to runner for timing/failure.
+
+        Called under _runner_locks[model_id].
+        """
+        self._runner_states[model_id] = RunnerLifecycleState.DOWNLOADING
+        self._runner_states[model_id] = RunnerLifecycleState.LOADING_TO_GPU
+        await self._runners[model_id].simulate_load()  # may raise _RunnerLoadAttemptError
+        self._runner_states[model_id] = RunnerLifecycleState.WARM
 
     # --- Memory management (called under _memory_lock) ---
 
