@@ -105,11 +105,12 @@ class HeliosPool:
 
         Must be called from within a running event loop (e.g., inside an async
         function or FastAPI lifespan). Idempotent: returns immediately if
-        already started. Background task spawning is added in later commits.
+        already started.
         """
         if self._started:
             return
         self._started = True
+        self._spawn_task(self._prewarm_loop())
 
     def admit(self) -> None:
         """Admission check -- raises AdmissionRejectedError if at capacity.
@@ -269,6 +270,57 @@ class HeliosPool:
         self._runner_states[model_id] = RunnerLifecycleState.LOADING_TO_GPU
         await self._runners[model_id].simulate_load()  # may raise _RunnerLoadAttemptError
         self._runner_states[model_id] = RunnerLifecycleState.WARM
+
+    # --- Background loops ---
+
+    async def _prewarm_loop(self) -> None:
+        """Periodically forecast demand and pre-warm COLD models.
+
+        Runs every prewarm_interval_s. Updates EWMA request rates (normalized
+        to per-minute), feeds the HoltPredictor, and triggers ensure_loaded
+        when predicted demand exceeds the threshold.
+
+        predictor.record() receives the raw per-tick count, NOT the normalized
+        per-minute rate. HoltPredictor tracks trend on the observation scale;
+        _peak normalizes predict_next() output to [0, 1]. The EWMA
+        request_rate_per_min uses per-minute normalization for
+        CostBasedEvictionPolicy. Same raw count, different normalizations.
+        """
+        while True:
+            await asyncio.sleep(self._config.prewarm_interval_s)
+            try:
+                for model_id, predictor in list(self._predictors.items()):
+                    # Drain request counter -- atomic pop from defaultdict
+                    recent_count = self._request_counter.pop(model_id, 0)
+
+                    # Update EWMA request rate -- normalized to per-minute
+                    met = self._metrics[model_id]
+                    met.request_rate_per_min = (
+                        self._config.ewma_alpha
+                        * (recent_count * 60.0 / self._config.prewarm_interval_s)
+                        + (1.0 - self._config.ewma_alpha) * met.request_rate_per_min
+                    )
+
+                    # Feed predictor and update predicted_demand
+                    predictor.record(recent_count)
+                    met.predicted_demand = await predictor.predict_next()
+
+                    # Pre-warm if forecast exceeds threshold and runner is cold
+                    if (
+                        met.predicted_demand >= self._config.prewarm_threshold
+                        and self._runner_states.get(model_id) is RunnerLifecycleState.COLD
+                    ):
+                        self._spawn_task(self.ensure_loaded(model_id))
+            except asyncio.CancelledError:
+                raise  # shutdown signal -- let cancellation propagate
+            except Exception:
+                # Log and continue rather than terminating the loop silently.
+                # A statsmodels fit error or transient metric update failure must
+                # not kill pre-warming for the rest of the pool's lifetime.
+                logger.warning(
+                    "helios.prewarm_loop.error",
+                    exc_info=True,
+                )
 
     # --- Memory management (called under _memory_lock) ---
 
