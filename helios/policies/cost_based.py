@@ -20,6 +20,10 @@ class CostBasedEvictionPolicy(BaseEvictionPolicy):
         configs: dict[str, RunnerConfig],
         metrics: dict[str, RunnerMetrics],
     ) -> str:
+        if configs.keys() != metrics.keys():
+            raise ValueError(
+                f"configs and metrics key mismatch: {set(configs.keys())} vs {set(metrics.keys())}"
+            )
         now = time.monotonic()
 
         def eviction_score(model_id: str) -> float:

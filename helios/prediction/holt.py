@@ -25,7 +25,7 @@ class HoltPredictor:
         self.model_id = model_id
         self._history: deque[float] = deque(maxlen=window_size)  # bounded
         self._peak: float = 1.0
-        self._fitted: Any = None
+        self._fitted: Any = None  # HoltWintersResultsWrapper -- typed Any, statsmodels lacks stubs
         self._dirty: bool = False
         self._lock = asyncio.Lock()  # prevents duplicate refits under concurrency
 
