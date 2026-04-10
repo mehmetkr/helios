@@ -41,7 +41,16 @@ _TRANSITIONS.update(
 
 
 def validate_transition(current: RunnerLifecycleState, target: RunnerLifecycleState) -> None:
-    """Raise RunnerStateError if the transition is illegal."""
+    """Raise RunnerStateError if the transition is illegal.
+
+    Scope: this is a specification/testing tool, not a runtime guard.
+    HeliosPool does not call this function on every state mutation for
+    performance reasons. Localized guards exist where correctness demands
+    them: _evict_synchronously() verifies WARM before evicting, and
+    dispatch() verifies WARM/ACTIVE before inferring. Use this function
+    in tests to verify FSM correctness and in external consumers that
+    want defensive validation.
+    """
     allowed = _TRANSITIONS.get(current, frozenset())
     if target not in allowed:
         raise RunnerStateError(

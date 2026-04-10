@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from collections import defaultdict
 from collections.abc import Coroutine
 from typing import Any
@@ -31,7 +32,14 @@ from helios.exceptions import (
     RunnerStateError,
 )
 from helios.fsm import RunnerLifecycleState
-from helios.observability.metrics import EVICTIONS_TOTAL, LOAD_FAILURES
+from helios.observability.metrics import (
+    COLD_STARTS_TOTAL,
+    EVICTIONS_TOTAL,
+    LOAD_DURATION_SECONDS,
+    LOAD_FAILURES,
+    POOL_MEMORY_USED_GB,
+    QUEUE_DEPTH,
+)
 from helios.policies.base import BaseEvictionPolicy
 from helios.policies.lru import LRUEvictionPolicy
 from helios.prediction.holt import HoltPredictor
@@ -125,10 +133,12 @@ class HeliosPool:
                 f"Pool at capacity ({self._config.max_queued_requests} queued requests)"
             )
         self._in_flight_requests += 1
+        QUEUE_DEPTH.set(self._in_flight_requests)
 
     def release(self) -> None:
         """Decrement admission counter. Called by RequestRouter in finally block."""
         self._in_flight_requests -= 1
+        QUEUE_DEPTH.set(self._in_flight_requests)
 
     async def ensure_loaded(self, model_id: str) -> None:
         """Ensure a model is ready for inference.
@@ -196,6 +206,7 @@ class HeliosPool:
         try:
             result = await self._runners[mid].infer(request)
             self._request_counter[mid] += 1
+            self._metrics[mid].last_request_at = time.monotonic()
             return result
         finally:
             self._active_requests[mid] -= 1
@@ -266,12 +277,41 @@ class HeliosPool:
     async def _simulate_load(self, model_id: str) -> None:
         """Drive FSM state transitions and delegate to runner for timing/failure.
 
-        Called under _runner_locks[model_id].
+        Called under _runner_locks[model_id]. Emits COLD_STARTS_TOTAL at the
+        start and LOAD_DURATION_SECONDS (with success/failure outcome) in a
+        finally block to ensure duration is recorded even on cancellation.
         """
+        COLD_STARTS_TOTAL.labels(model_id=model_id).inc()
         self._runner_states[model_id] = RunnerLifecycleState.DOWNLOADING
         self._runner_states[model_id] = RunnerLifecycleState.LOADING_TO_GPU
-        await self._runners[model_id].simulate_load()  # may raise _RunnerLoadAttemptError
+        start_time = time.monotonic()
+        success = False
+        try:
+            await self._runners[model_id].simulate_load()
+            success = True
+        finally:
+            duration = time.monotonic() - start_time
+            outcome = "success" if success else "failure"
+            LOAD_DURATION_SECONDS.labels(model_id=model_id, outcome=outcome).observe(duration)
         self._runner_states[model_id] = RunnerLifecycleState.WARM
+
+    async def _prewarm_model(self, model_id: str) -> None:
+        """Pre-warm a single model, logging failures without killing the loop.
+
+        Called as a spawned task from _prewarm_loop(). Catches Exception (not
+        BaseException) so CancelledError still propagates for clean shutdown.
+        Without this wrapper, ensure_loaded() exceptions would land in the
+        spawned Task and only surface as "Task exception was never retrieved"
+        in asyncio's default handler -- invisible to structlog.
+        """
+        try:
+            await self.ensure_loaded(model_id)
+        except Exception:
+            logger.warning(
+                "helios.prewarm.ensure_loaded_failed",
+                model_id=model_id,
+                exc_info=True,
+            )
 
     # --- Background loops ---
 
@@ -312,7 +352,7 @@ class HeliosPool:
                         met.predicted_demand >= self._config.prewarm_threshold
                         and self._runner_states.get(model_id) is RunnerLifecycleState.COLD
                     ):
-                        self._spawn_task(self.ensure_loaded(model_id))
+                        self._spawn_task(self._prewarm_model(model_id))
             except asyncio.CancelledError:
                 raise  # shutdown signal -- let cancellation propagate
             except Exception:
@@ -401,6 +441,12 @@ class HeliosPool:
         # Step 5: Reset all states.
         for model_id in self._runner_states:
             self._runner_states[model_id] = RunnerLifecycleState.COLD
+        # Restore full memory budget -- all runners are now COLD.
+        # Deliberately NOT resetting _in_flight_requests: if a caller is
+        # between admit() and release(), resetting would cause release() to
+        # decrement below zero. In-flight requests drain naturally.
+        self._available_memory_gb = self._config.total_memory_gb
+        self._update_memory_gauge()
         self._background_tasks.clear()
         self._load_futures.clear()
         self._started = False
@@ -457,6 +503,7 @@ class HeliosPool:
         self._runner_states[model_id] = RunnerLifecycleState.EVICTING
         self._runner_states[model_id] = RunnerLifecycleState.COLD
         self._available_memory_gb += self._configs[model_id].memory_gb
+        self._update_memory_gauge()
         EVICTIONS_TOTAL.labels(
             model_id=model_id, reason=self._eviction_policy.__class__.__name__
         ).inc()
@@ -467,6 +514,7 @@ class HeliosPool:
         Called under _memory_lock after _evict_until_free succeeds.
         """
         self._available_memory_gb -= self._configs[model_id].memory_gb
+        self._update_memory_gauge()
 
     def _release_memory(self, model_id: str) -> None:
         """Increment available memory when a model is evicted or load fails.
@@ -474,6 +522,14 @@ class HeliosPool:
         Called under _memory_lock.
         """
         self._available_memory_gb += self._configs[model_id].memory_gb
+        self._update_memory_gauge()
+
+    def _update_memory_gauge(self) -> None:
+        """Update POOL_MEMORY_USED_GB to reflect current utilization.
+
+        Called after every mutation of _available_memory_gb.
+        """
+        POOL_MEMORY_USED_GB.set(self._config.total_memory_gb - self._available_memory_gb)
 
     # --- Background task management ---
 
