@@ -111,6 +111,7 @@ class HeliosPool:
             return
         self._started = True
         self._spawn_task(self._prewarm_loop())
+        self._spawn_task(self._health_check_loop())
 
     def admit(self) -> None:
         """Admission check -- raises AdmissionRejectedError if at capacity.
@@ -319,6 +320,47 @@ class HeliosPool:
                 # not kill pre-warming for the rest of the pool's lifetime.
                 logger.warning(
                     "helios.prewarm_loop.error",
+                    exc_info=True,
+                )
+
+    async def _health_check_loop(self) -> None:
+        """Periodically verify that WARM runners are responsive.
+
+        Failed runners are transitioned to COLD under _memory_lock and memory
+        is released. ACTIVE runners are excluded -- their health is implicitly
+        validated by the inference outcome. No _load_futures cleanup is needed:
+        WARM runners have no active future (cleaned up by
+        _initiate_load_and_resolve.finally when loading completed).
+        """
+        while True:
+            await asyncio.sleep(self._config.health_check_interval_s)
+            try:
+                for model_id, runner in list(self._runners.items()):
+                    state = self._runner_states.get(model_id)
+                    if state is not RunnerLifecycleState.WARM:
+                        continue  # ACTIVE runners excluded
+                    if not await runner.is_healthy():
+                        logger.warning(
+                            "helios.health_check.failed",
+                            model_id=model_id,
+                            state=state.name,
+                        )
+                        async with self._memory_lock:
+                            # Re-check state under lock. Between is_healthy()
+                            # returning and acquiring _memory_lock, another
+                            # coroutine may have already evicted this runner.
+                            # Releasing memory on an already-COLD runner would
+                            # double-release, corrupting the budget counter.
+                            current_state = self._runner_states.get(model_id)
+                            if current_state is not RunnerLifecycleState.WARM:
+                                continue
+                            self._release_memory(model_id)
+                            self._runner_states[model_id] = RunnerLifecycleState.COLD
+            except asyncio.CancelledError:
+                raise  # shutdown signal
+            except Exception:
+                logger.warning(
+                    "helios.health_check_loop.error",
                     exc_info=True,
                 )
 
