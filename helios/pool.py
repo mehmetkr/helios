@@ -2,8 +2,8 @@
 
 Manages the lifecycle of simulated model runners: registration, memory budget,
 eviction, load orchestration, pre-warming, health checks, and graceful shutdown.
-This module is built incrementally -- pre-warm loop, health checks, and
-shutdown are added in subsequent commits.
+All core subsystems are implemented: load orchestration, pre-warm loop,
+health checks, and graceful shutdown.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from helios.exceptions import (
     AdmissionRejectedError,
     HeliosError,
     MemoryExhaustedError,
+    RunnerLoadError,
     RunnerStateError,
 )
 from helios.fsm import RunnerLifecycleState
@@ -363,6 +364,46 @@ class HeliosPool:
                     "helios.health_check_loop.error",
                     exc_info=True,
                 )
+
+    # --- Shutdown ---
+
+    async def shutdown(self, timeout_s: float = 10.0) -> None:
+        """Graceful shutdown with timeout budget.
+
+        1. Resolve all unresolved _load_futures with RunnerLoadError.
+        2. Cancel background tasks (_prewarm_loop, _health_check_loop, loads).
+        3. Wait up to timeout_s for tasks to complete.
+        4. Force-cancel remaining tasks after timeout.
+        5. Transition all runners to COLD regardless of current state.
+
+        In-flight dispatch() calls may complete naturally if inference is fast.
+        The dispatch().finally block checks state before transitioning
+        ACTIVE -> WARM -- if shutdown has force-set COLD, the COLD survives.
+        """
+        # Step 1: Resolve pending futures so awaiting callers get a clean exception.
+        for _model_id, future in list(self._load_futures.items()):
+            if not future.done():
+                future.set_exception(RunnerLoadError("pool shutting down"))
+
+        # Step 2-4: Cancel and await with timeout.
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            _done, pending = await asyncio.wait(
+                self._background_tasks,
+                timeout=timeout_s,
+                return_when=asyncio.ALL_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                logger.warning("helios.shutdown.force_cancel", task=task.get_name())
+
+        # Step 5: Reset all states.
+        for model_id in self._runner_states:
+            self._runner_states[model_id] = RunnerLifecycleState.COLD
+        self._background_tasks.clear()
+        self._load_futures.clear()
+        self._started = False
 
     # --- Memory management (called under _memory_lock) ---
 

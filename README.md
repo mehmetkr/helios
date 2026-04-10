@@ -128,7 +128,7 @@ A concurrent Hypothesis test drives random request sequences through `asyncio.ga
 - [x] **Phase 2 — Building Blocks**
   Simulated model runner with failure injection. LRU and cost-based eviction policies (5-factor scoring). Holt predictor with lazy dirty-flag refit via `asyncio.to_thread()`. Unit tests for each component.
 
-- [ ] **Phase 3 — Core Engine**
+- [x] **Phase 3 — Core Engine**
   HeliosPool with two-phase locking, iterative eviction, three-path `ensure_loaded`, ACTIVE-aware dispatch, pre-warm loop with EWMA, health check subsystem, graceful shutdown with timeout budget.
 
 - [ ] **Phase 4 — Routing and Application**
