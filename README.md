@@ -131,7 +131,7 @@ A concurrent Hypothesis test drives random request sequences through `asyncio.ga
 - [x] **Phase 3 — Core Engine**
   HeliosPool with two-phase locking, iterative eviction, three-path `ensure_loaded`, ACTIVE-aware dispatch, pre-warm loop with EWMA, health check subsystem, graceful shutdown with timeout budget.
 
-- [ ] **Phase 4 — Routing and Application**
+- [x] **Phase 4 — Routing and Application**
   RequestRouter with retry loop, admission control, and typed exception semantics. FastAPI application with lifespan management, 20-model simulation catalog, and HTTP error mapping. Prometheus metrics and structlog observability.
 
 - [ ] **Phase 5 — Proof of Correctness**
