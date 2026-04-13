@@ -118,17 +118,20 @@ def model_request_strategy(
 ) -> list[InferenceRequest]:
     """Hypothesis strategy returning a list of InferenceRequests.
 
-    Model IDs are drawn from "0" through "9" (matching test fixtures).
+    Guarantees all 10 model IDs ("0" through "9") appear at least once,
+    forcing eviction pressure on every Hypothesis example. Additional
+    random requests are appended and the full list is shuffled.
     Use as @given(model_request_strategy()) -- NOT @given(st.lists(...)).
     """
-    return draw(
+    base = [InferenceRequest(model_id=str(i), payload="test") for i in range(10)]
+    extra = draw(
         st.lists(
             st.builds(
                 InferenceRequest,
                 model_id=st.sampled_from([str(i) for i in range(10)]),
                 payload=st.just("test"),
             ),
-            min_size=1,
-            max_size=200,
+            max_size=20,
         )
     )
+    return draw(st.permutations(base + extra))

@@ -140,13 +140,24 @@ class HeliosPool:
         self._in_flight_requests -= 1
         QUEUE_DEPTH.set(self._in_flight_requests)
 
-    async def ensure_loaded(self, model_id: str) -> None:
+    def is_warm(self, model_id: str) -> bool:
+        """Check if a model is ready for inference (WARM or ACTIVE)."""
+        return self._runner_states.get(model_id) in (
+            RunnerLifecycleState.WARM,
+            RunnerLifecycleState.ACTIVE,
+        )
+
+    async def ensure_loaded(self, model_id: str) -> bool:
         """Ensure a model is ready for inference.
 
+        Returns True if the model was already warm (no load triggered).
+        Returns False if a load was triggered or waited on (cold start).
+        The caller uses this to set cache_status on InferenceResult.
+
         Three code paths for correctness and performance:
-        - Fast path 1: already WARM/ACTIVE -- return immediately (no lock)
-        - Fast path 2: load in progress -- share existing future (no lock)
-        - Slow path: COLD -- acquire lock, create future, start load
+        - Fast path 1: already WARM/ACTIVE -- return True (no lock)
+        - Fast path 2: load in progress -- share existing future, return False
+        - Slow path: COLD -- acquire lock, create future, start load, return False
         """
         if not self._started:
             raise HeliosError("pool not started")
@@ -157,7 +168,7 @@ class HeliosPool:
         # Safe without lock: _runner_states is only mutated from the event loop thread.
         state = self._runner_states.get(model_id)
         if state in (RunnerLifecycleState.WARM, RunnerLifecycleState.ACTIVE):
-            return
+            return True
 
         # Fast path 2: model currently loading -- share the existing future.
         # Prevents blocking on _runner_locks[model_id] which _initiate_load
@@ -166,7 +177,7 @@ class HeliosPool:
         existing_future = self._load_futures.get(model_id)
         if existing_future is not None:
             await asyncio.shield(existing_future)
-            return
+            return False
 
         # Slow path: model is COLD and no load is in progress.
         async with self._runner_locks[model_id]:
@@ -175,7 +186,7 @@ class HeliosPool:
                 RunnerLifecycleState.WARM,
                 RunnerLifecycleState.ACTIVE,
             ):
-                return
+                return True
             # Re-check future: another coroutine may have created one while we waited.
             if model_id in self._load_futures:
                 future = self._load_futures[model_id]
@@ -184,6 +195,7 @@ class HeliosPool:
                 self._load_futures[model_id] = future
                 self._spawn_task(self._initiate_load_and_resolve(model_id, future))
         await asyncio.shield(future)
+        return False
 
     async def dispatch(self, request: InferenceRequest) -> InferenceResult:
         """Forward request to a WARM/ACTIVE runner.

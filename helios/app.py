@@ -21,7 +21,6 @@ from helios.exceptions import (
     RequestTimeoutError,
     RunnerLoadError,
 )
-from helios.fsm import RunnerLifecycleState
 from helios.observability import configure_logging
 from helios.observability.metrics import REQUEST_LATENCY, metrics_asgi_app
 from helios.pool import HeliosPool
@@ -95,21 +94,15 @@ app.mount("/metrics", metrics_asgi_app)
 @app.post("/v1/infer")
 async def infer(request: InferenceRequest, raw: Request) -> InferenceResult:
     """Route an inference request through the pool."""
-    pool: HeliosPool = raw.app.state.pool
     router: RequestRouter = raw.app.state.router
-
-    # Determine cache status before routing (WARM/ACTIVE = warm hit).
-    was_warm = pool._runner_states.get(request.model_id) in (
-        RunnerLifecycleState.WARM,
-        RunnerLifecycleState.ACTIVE,
-    )
 
     start = time.monotonic()
     result = await router.route(request)
     duration = time.monotonic() - start
 
-    cache_status = "warm" if was_warm else "cold"
-    REQUEST_LATENCY.labels(model_id=request.model_id, cache_status=cache_status).observe(duration)
+    REQUEST_LATENCY.labels(model_id=request.model_id, cache_status=result.cache_status).observe(
+        duration
+    )
 
     return result
 

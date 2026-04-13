@@ -85,6 +85,10 @@ class PoolConfig:
     # Maximum concurrent route() calls. Prevents unbounded queue growth under
     # thundering-herd conditions. AdmissionRejectedError raised when exceeded.
 
+    retry_backoff_s: float = 0.1
+    # Backoff duration between retries for transient MemoryExhaustedError.
+    # Used by RequestRouter when a load fails due to temporary memory pressure.
+
     def __post_init__(self) -> None:
         """Enforce range constraints that the type system cannot express."""
         if not (0.0 <= self.prewarm_threshold <= 1.0):
@@ -109,6 +113,8 @@ class PoolConfig:
             )
         if self.max_queued_requests < 1:
             raise ValueError(f"max_queued_requests must be >= 1, got {self.max_queued_requests}.")
+        if self.retry_backoff_s < 0:
+            raise ValueError(f"retry_backoff_s must be >= 0, got {self.retry_backoff_s}.")
         # Interval fields: zero or negative values would cause asyncio.sleep
         # to behave incorrectly (sleep(0) yields once but negative is undefined).
         for field_name, value in (

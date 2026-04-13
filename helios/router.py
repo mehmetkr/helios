@@ -42,9 +42,10 @@ class RequestRouter:
         """
         self._pool.admit()  # raises AdmissionRejectedError if at capacity
         try:
+            was_warm = False
             for attempt in range(self._pool.config.max_retries + 1):
                 try:
-                    await asyncio.wait_for(
+                    was_warm = await asyncio.wait_for(
                         self._pool.ensure_loaded(request.model_id),
                         timeout=self._pool.config.request_timeout_s,
                     )
@@ -58,8 +59,8 @@ class RequestRouter:
                         raise  # structural -- not retryable
                     if attempt == self._pool.config.max_retries:
                         raise  # transient but out of retries
-                    # Transient: brief backoff, then retry (loading models may finish)
-                    await asyncio.sleep(0.1)
+                    # Transient: configurable backoff, then retry.
+                    await asyncio.sleep(self._pool.config.retry_backoff_s)
                     continue
                 except HeliosError:
                     raise  # RunnerStateError, AdmissionRejectedError, etc. -- not retryable
@@ -77,7 +78,10 @@ class RequestRouter:
                 # Load succeeded -- dispatch is outside the retry try/except
                 # scope. Inference errors propagate directly to the caller,
                 # not wrapped as RunnerLoadError. Preserves typed exceptions.
-                return await self._pool.dispatch(request)
+                result = await self._pool.dispatch(request)
+                if not was_warm:
+                    result = result.model_copy(update={"cache_status": "cold"})
+                return result
             # Should be unreachable -- loop either returns or raises.
             raise RunnerLoadError(f"Runner for {request.model_id!r} failed to load")
         finally:
