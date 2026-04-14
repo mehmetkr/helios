@@ -137,7 +137,7 @@ A concurrent Hypothesis test drives random request sequences through `asyncio.ga
 - [x] **Phase 5 — Proof of Correctness**
   Integration tests (router buffering, memory lock safety, eviction, retry paths). Hypothesis property-based invariant tests under concurrent execution. Scenario tests for thundering herd, traffic spikes, budget exhaustion, and timeout resilience.
 
-- [ ] **Phase 6 — Performance and Production**
+- [x] **Phase 6 — Performance and Production**
   Benchmark harness comparing LRU vs cost-based eviction under steady, spiky, and diurnal load profiles. Docker Compose simulation harness with Grafana dashboards. GitHub Actions CI pipeline.
 
 ---
