@@ -1,0 +1,30 @@
+services:
+  helios:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      HELIOS_TOTAL_MEMORY_GB: "80.0"
+      HELIOS_MAX_CONCURRENT_LOADS: "4"
+
+  load_gen:
+    build: ./load_gen
+    depends_on: [helios]
+    environment:
+      PROFILE: spiky
+      TARGET_URL: http://helios:8000
+      MODELS: "20"
+      BURST_MULTIPLIER: "5"
+
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on: [helios]
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    ports: ["3000:3000"]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on: [prometheus]
