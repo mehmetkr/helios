@@ -31,7 +31,7 @@ from helios.router import RequestRouter
 # Pre-computed from random.Random(42): load_time_s ~ uniform(2.0, 14.0),
 # memory_gb ~ uniform(2.0, 6.0), rounded to 2 decimal places.
 # failure_rate=0.0 and infer_time_s=0.05 uniform across all models.
-# Sum memory: 72.52 GB. With total_memory_gb=80.0, most models can coexist.
+# Sum memory: 72.92 GB. With total_memory_gb=80.0, most models can coexist.
 # ---------------------------------------------------------------------------
 
 SIMULATION_MODELS = [
