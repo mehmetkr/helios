@@ -119,8 +119,11 @@ async def test_pool_never_exceeds_memory_budget(
 async def test_memory_accounting_consistent_after_idle(
     requests: list[InferenceRequest],
 ) -> None:
-    """After all requests complete, available + WARM memory == total.
+    """After all requests complete, available + used memory == total.
     Catches memory leaks from failed rollbacks or double-reservations.
+
+    Asserts BEFORE shutdown -- shutdown() unconditionally resets
+    _available_memory_gb, which would mask any leak.
     """
     pool = _make_pool()
     pool.start()
@@ -130,11 +133,29 @@ async def test_memory_accounting_consistent_after_idle(
         with contextlib.suppress(HeliosError):
             await asyncio.wait_for(router.route(req), timeout=30.0)
 
-    await asyncio.gather(*[route_ignoring_errors(req) for req in requests])
-    await pool.shutdown()
+    try:
+        await asyncio.gather(*[route_ignoring_errors(req) for req in requests])
 
-    # After shutdown, all runners are COLD and full budget is restored.
-    assert pool._available_memory_gb == pytest.approx(pool.config.total_memory_gb)
+        # Assert BEFORE shutdown -- shutdown() resets _available_memory_gb,
+        # masking leaks. Include in-progress loads (DOWNLOADING/LOADING_TO_GPU)
+        # because memory is reserved before the load begins.
+        used_gb = sum(
+            pool._configs[mid].memory_gb
+            for mid, state in pool._runner_states.items()
+            if state
+            in (
+                RunnerLifecycleState.WARM,
+                RunnerLifecycleState.ACTIVE,
+                RunnerLifecycleState.DOWNLOADING,
+                RunnerLifecycleState.LOADING_TO_GPU,
+            )
+        )
+        assert pool._available_memory_gb + used_gb == pytest.approx(pool.config.total_memory_gb), (
+            f"Memory leak: available={pool._available_memory_gb:.2f}, "
+            f"used={used_gb:.2f}, total={pool.config.total_memory_gb:.2f}"
+        )
+    finally:
+        await pool.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -225,24 +246,6 @@ async def test_no_concurrent_duplicate_loads(
 # ---------------------------------------------------------------------------
 # Invariant 5: select_for_eviction returns from candidate set
 # ---------------------------------------------------------------------------
-
-
-runner_config_strategy = st.builds(
-    RunnerConfig,
-    model_id=st.text(min_size=1, max_size=10),
-    memory_gb=st.floats(min_value=0.1, max_value=10.0),
-    load_time_s=st.floats(min_value=0.01, max_value=20.0),
-    failure_rate=st.just(0.0),
-    infer_time_s=st.floats(min_value=0.01, max_value=1.0),
-)
-
-runner_metrics_strategy = st.builds(
-    RunnerMetrics,
-    model_id=st.text(min_size=1, max_size=10),
-    last_request_at=st.floats(min_value=0.0, max_value=1e9),
-    request_rate_per_min=st.floats(min_value=0.0, max_value=1000.0),
-    predicted_demand=st.floats(min_value=0.0, max_value=1.0),
-)
 
 
 @given(st.data())
