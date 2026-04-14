@@ -61,9 +61,9 @@ def _requests_per_second(profile: str, elapsed: float) -> float:
     if profile == "steady":
         return 2.0
     if profile == "spiky":
-        # Baseline 1 req/s, burst to 5 req/s for 5s every 30s.
-        cycle = elapsed % 30.0
-        return 5.0 if cycle < 5.0 else 1.0
+        # Baseline 1 req/s, burst to 5 req/s for 10s every 60s.
+        cycle = elapsed % 60.0
+        return 5.0 if cycle < 10.0 else 1.0
     if profile == "diurnal":
         # Sinusoidal: 0.5 to 3.0 req/s over a 60s compressed day cycle.
         return 1.75 + 1.25 * math.sin(2 * math.pi * elapsed / 60.0)
@@ -143,9 +143,9 @@ async def _run_benchmark(
         from prometheus_client import REGISTRY
 
         for metric in REGISTRY.collect():
-            if metric.name == "helios_evictions_total":
+            if metric.name == "helios_evictions":
                 for sample in metric.samples:
-                    if sample.name == "helios_evictions_total_total":
+                    if sample.name == "helios_evictions_total":
                         result.evictions += int(sample.value)
     finally:
         await pool.shutdown()

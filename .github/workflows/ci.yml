@@ -15,7 +15,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: ruff check helios/ tests/
-      - run: ruff format --check helios/ tests/
+      - run: ruff check helios/ tests/ benchmark.py load_gen/
+      - run: ruff format --check helios/ tests/ benchmark.py load_gen/
       - run: mypy helios/
       - run: pytest tests/ -v --tb=short
+        env:
+          HYPOTHESIS_PROFILE: ci

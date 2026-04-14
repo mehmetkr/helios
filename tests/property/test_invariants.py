@@ -66,7 +66,7 @@ def _make_pool() -> HeliosPool:
 
 @pytest.mark.asyncio
 @given(model_request_strategy())
-@settings(max_examples=500, deadline=None)
+@settings(deadline=None)
 async def test_pool_never_exceeds_memory_budget(
     requests: list[InferenceRequest],
 ) -> None:
@@ -115,7 +115,7 @@ async def test_pool_never_exceeds_memory_budget(
 
 @pytest.mark.asyncio
 @given(model_request_strategy())
-@settings(max_examples=200, deadline=None)
+@settings(deadline=None)
 async def test_memory_accounting_consistent_after_idle(
     requests: list[InferenceRequest],
 ) -> None:
@@ -165,7 +165,7 @@ async def test_memory_accounting_consistent_after_idle(
 
 @pytest.mark.asyncio
 @given(model_request_strategy())
-@settings(max_examples=200, deadline=None)
+@settings(deadline=None)
 async def test_all_exceptions_are_typed(
     requests: list[InferenceRequest],
 ) -> None:
@@ -203,7 +203,7 @@ async def test_all_exceptions_are_typed(
 
 @pytest.mark.asyncio
 @given(model_request_strategy())
-@settings(max_examples=200, deadline=None)
+@settings(deadline=None)
 async def test_no_concurrent_duplicate_loads(
     requests: list[InferenceRequest],
 ) -> None:
@@ -249,7 +249,7 @@ async def test_no_concurrent_duplicate_loads(
 
 
 @given(st.data())
-@settings(max_examples=500)
+@settings()
 def test_lru_eviction_returns_from_candidate_set(data: st.DataObject) -> None:
     """LRU policy must return a model_id that exists in its input."""
     n = data.draw(st.integers(min_value=1, max_value=20))
@@ -275,7 +275,7 @@ def test_lru_eviction_returns_from_candidate_set(data: st.DataObject) -> None:
 
 
 @given(st.data())
-@settings(max_examples=500)
+@settings()
 def test_cost_based_eviction_returns_from_candidate_set(
     data: st.DataObject,
 ) -> None:

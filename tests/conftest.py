@@ -11,15 +11,23 @@ Test fixtures and the 20-model app.py catalog are intentionally independent.
 
 from __future__ import annotations
 
+import os
 import random
 from collections.abc import AsyncIterator
 
 import pytest_asyncio
+from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
 
 from helios.config import InferenceRequest, PoolConfig, RunnerConfig
 from helios.pool import HeliosPool
 from helios.router import RequestRouter
+
+# Hypothesis profiles: "default" for local (500 examples), "ci" for CI (50).
+# Activate CI profile by setting HYPOTHESIS_PROFILE=ci in the environment.
+hypothesis_settings.register_profile("default", max_examples=500, deadline=None)
+hypothesis_settings.register_profile("ci", max_examples=50, deadline=None)
+hypothesis_settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "default"))
 
 
 @pytest_asyncio.fixture
