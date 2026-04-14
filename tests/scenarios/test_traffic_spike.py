@@ -62,8 +62,8 @@ async def test_sudden_spike_triggers_prewarming() -> None:
         await router.route(InferenceRequest(model_id="2", payload="fill"))
         await router.route(InferenceRequest(model_id="3", payload="evict"))
 
-        # Model "0" should now be COLD (evicted by LRU).
-        assert pool._runner_states["0"] is RunnerLifecycleState.COLD
+        # No intermediate COLD assertion -- the prewarm loop (0.05s ticks) may
+        # already be re-warming model "0" by the time eviction completes.
 
         # Phase 3: Wait for pre-warm loop to detect high predicted demand
         # for model "0" and proactively reload it. Allow up to 2s.
