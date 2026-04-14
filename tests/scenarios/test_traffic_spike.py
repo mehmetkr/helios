@@ -57,6 +57,12 @@ async def test_sudden_spike_triggers_prewarming() -> None:
         # Model "0" should be WARM with high demand history.
         assert pool._runner_states["0"] is RunnerLifecycleState.WARM
 
+        # Pin predicted_demand to guarantee prewarm triggers regardless of
+        # zero-count decay during Phase 2. This isolates what the scenario
+        # test proves: the prewarm loop acts on high demand for a COLD model.
+        # Predictor accuracy is tested by test_ewma.py and test_holt_predictor_async.py.
+        pool._metrics["0"].predicted_demand = 1.0
+
         # Phase 2: Evict model "0" by loading enough other models.
         await router.route(InferenceRequest(model_id="1", payload="fill"))
         await router.route(InferenceRequest(model_id="2", payload="fill"))
