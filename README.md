@@ -134,7 +134,7 @@ A concurrent Hypothesis test drives random request sequences through `asyncio.ga
 - [x] **Phase 4 — Routing and Application**
   RequestRouter with retry loop, admission control, and typed exception semantics. FastAPI application with lifespan management, 20-model simulation catalog, and HTTP error mapping. Prometheus metrics and structlog observability.
 
-- [ ] **Phase 5 — Proof of Correctness**
+- [x] **Phase 5 — Proof of Correctness**
   Integration tests (router buffering, memory lock safety, eviction, retry paths). Hypothesis property-based invariant tests under concurrent execution. Scenario tests for thundering herd, traffic spikes, budget exhaustion, and timeout resilience.
 
 - [ ] **Phase 6 — Performance and Production**
