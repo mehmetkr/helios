@@ -1,0 +1,122 @@
+{
+  "dashboard": {
+    "title": "Helios Control Plane",
+    "uid": "helios-main",
+    "timezone": "browser",
+    "refresh": "5s",
+    "panels": [
+      {
+        "title": "Request Latency p99 (TTFT)",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(helios_request_latency_seconds_bucket[1m])) by (le))",
+            "legendFormat": "p99"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(helios_request_latency_seconds_bucket[1m])) by (le))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(helios_request_latency_seconds_bucket[1m])) by (le))",
+            "legendFormat": "p50"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {"unit": "s"}
+        }
+      },
+      {
+        "title": "Warm Hit Rate",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(helios_request_latency_seconds_count{cache_status=\"warm\"}[1m])) / sum(rate(helios_request_latency_seconds_count[1m]))",
+            "legendFormat": "warm hit rate"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {"unit": "percentunit", "min": 0, "max": 1}
+        }
+      },
+      {
+        "title": "Memory Utilization",
+        "type": "gauge",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "helios_pool_memory_used_gb",
+            "legendFormat": "used GB"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {"unit": "decgbytes", "max": 80}
+        }
+      },
+      {
+        "title": "Queue Depth",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 8},
+        "targets": [
+          {
+            "expr": "helios_queue_depth",
+            "legendFormat": "queued"
+          }
+        ]
+      },
+      {
+        "title": "Eviction Rate",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(helios_evictions_total[1m]))",
+            "legendFormat": "evictions/s"
+          }
+        ]
+      },
+      {
+        "title": "Cold Starts",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 8},
+        "targets": [
+          {
+            "expr": "sum(rate(helios_cold_starts_total[1m]))",
+            "legendFormat": "cold starts/s"
+          }
+        ]
+      },
+      {
+        "title": "Load Duration (p99)",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(helios_load_duration_seconds_bucket{outcome=\"success\"}[1m])) by (le))",
+            "legendFormat": "p99 success"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(helios_load_duration_seconds_bucket{outcome=\"failure\"}[1m])) by (le))",
+            "legendFormat": "p99 failure"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {"unit": "s"}
+        }
+      },
+      {
+        "title": "Load Failures",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "sum(rate(helios_load_failures_total[1m]))",
+            "legendFormat": "failures/s"
+          }
+        ]
+      }
+    ]
+  }
+}
