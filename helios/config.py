@@ -8,6 +8,7 @@ Pydantic v2 for validation and serialization.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -143,4 +144,4 @@ class InferenceResult(BaseModel):
     model_id: str
     result: str
     latency_ms: float
-    cache_status: str  # "warm" | "cold"
+    cache_status: Literal["warm", "cold"]
