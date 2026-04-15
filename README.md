@@ -160,7 +160,7 @@ Reproduce: `python benchmark.py --profile spiky --policy cost_based`
 
 ## Test Summary
 
-**108 tests** across 4 layers, all passing under mypy strict and ruff.
+**115 tests** across 4 layers, all passing under mypy strict and ruff.
 
 | Layer | Tests | What it proves |
 |---|---|---|
@@ -174,28 +174,36 @@ Reproduce: `python benchmark.py --profile spiky --policy cost_based`
 ## Quick Start
 
 ```bash
-# Install
+# Create a virtual environment and install
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run tests
+# Run tests (115 tests, ~2 minutes including Hypothesis property tests)
 pytest tests/ -v
 
-# Run benchmark
+# Run benchmark (~45 seconds)
 python benchmark.py --profile spiky --policy cost_based
 
-# Start the simulation stack
-docker compose up
+# Start the local server
+uvicorn helios.app:app --port 8000
 
-# Hit the inference endpoint
+# In another terminal — hit the inference endpoint
 curl -X POST http://localhost:8000/v1/infer \
   -H "Content-Type: application/json" \
   -d '{"model_id": "model-00", "payload": "hello"}'
 
 # Prometheus metrics
 curl http://localhost:8000/metrics
+```
 
-# Grafana dashboard
-open http://localhost:3000
+**With Docker Compose** (includes Prometheus + Grafana):
+
+```bash
+docker compose up
+# Grafana: http://localhost:3000
+# Prometheus: http://localhost:9090
+# Helios API: http://localhost:8000
 ```
 
 ---
