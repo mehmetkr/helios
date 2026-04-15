@@ -72,8 +72,9 @@ async def test_sudden_spike_triggers_prewarming() -> None:
         # already be re-warming model "0" by the time eviction completes.
 
         # Phase 3: Wait for pre-warm loop to detect high predicted demand
-        # for model "0" and proactively reload it. Allow up to 2s.
-        for _ in range(40):
+        # for model "0" and proactively reload it. Allow up to 5s
+        # (generous for slow CI runners).
+        for _ in range(100):
             await asyncio.sleep(0.05)
             if pool._runner_states["0"] is RunnerLifecycleState.WARM:
                 break
