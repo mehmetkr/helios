@@ -25,7 +25,7 @@ async def test_sudden_spike_triggers_prewarming() -> None:
     """
     pool = HeliosPool(
         config=PoolConfig(
-            total_memory_gb=6.0,  # tight budget: 3 x 2GB models
+            total_memory_gb=8.0,  # fits 4 x 2GB -- room for prewarm without eviction
             max_concurrent_loads=2,
             request_timeout_s=5.0,
             prewarm_interval_s=0.05,  # fast ticks for test speed
@@ -57,19 +57,32 @@ async def test_sudden_spike_triggers_prewarming() -> None:
         # Model "0" should be WARM with high demand history.
         assert pool._runner_states["0"] is RunnerLifecycleState.WARM
 
-        # Pin predicted_demand to guarantee prewarm triggers regardless of
-        # zero-count decay during Phase 2. This isolates what the scenario
-        # test proves: the prewarm loop acts on high demand for a COLD model.
-        # Predictor accuracy is tested by test_ewma.py and test_holt_predictor_async.py.
-        pool._metrics["0"].predicted_demand = 1.0
+        # Override the predictor for model "0" so predict_next() always
+        # returns 1.0. This isolates what the scenario test proves: the
+        # prewarm loop acts on high demand for a COLD model. The prewarm
+        # loop calls met.predicted_demand = await predictor.predict_next()
+        # on each tick, which would overwrite a one-time pin. Replacing the
+        # predictor makes the high-demand signal permanent.
+        # Predictor accuracy is tested by test_ewma.py and
+        # test_holt_predictor_async.py.
+        from helios.prediction.holt import HoltPredictor
+
+        original_predictor = pool._predictors["0"]
+
+        class _AlwaysHighPredictor(HoltPredictor):
+            async def predict_next(self) -> float:
+                return 1.0
+
+        pool._predictors["0"] = _AlwaysHighPredictor("0")
+        # Copy record() state so the predictor has enough history.
+        pool._predictors["0"]._history = original_predictor._history
 
         # Phase 2: Evict model "0" by loading enough other models.
+        # With 8GB budget, 3 new models + model "0" = 4 x 2GB = 8GB.
+        # Loading model "3" forces eviction of model "0" (oldest LRU).
         await router.route(InferenceRequest(model_id="1", payload="fill"))
         await router.route(InferenceRequest(model_id="2", payload="fill"))
         await router.route(InferenceRequest(model_id="3", payload="evict"))
-
-        # No intermediate COLD assertion -- the prewarm loop (0.05s ticks) may
-        # already be re-warming model "0" by the time eviction completes.
 
         # Phase 3: Wait for pre-warm loop to detect high predicted demand
         # for model "0" and proactively reload it. Allow up to 5s
